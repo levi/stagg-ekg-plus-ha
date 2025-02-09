@@ -12,6 +12,21 @@ A Home Assistant integration for the Fellow Stagg EKG+ electric kettle. Control 
 
 ## Installation
 
+### Option 1: HACS (Recommended)
+
+1. Make sure you have [HACS](https://hacs.xyz) installed
+2. Add this repository as a custom repository in HACS:
+   - Click the menu icon in the top right of HACS
+   - Select "Custom repositories"
+   - Add `levi/stagg-ekg-plus` with category "Integration"
+3. Click "Download" on the Stagg EKG+ integration
+4. Restart Home Assistant
+5. Go to Settings -> Devices & Services -> Add Integration
+6. Search for "Stagg EKG+"
+7. Follow the configuration steps
+
+### Option 2: Manual Installation
+
 1. Copy the `custom_components/stagg_ekg` directory to your Home Assistant's `custom_components` directory
 2. Restart Home Assistant
 3. Go to Settings -> Devices & Services -> Add Integration
@@ -36,7 +51,8 @@ Once configured, the kettle will appear as a climate entity in Home Assistant. Y
 
 ## Requirements
 
-- Home Assistant
+- Home Assistant 2024.1.0 or newer
+- Home Assistant Community Store (HACS) for easy installation
 - Bluetooth support in your Home Assistant instance
 - A Fellow Stagg EKG+ kettle
 
@@ -47,6 +63,10 @@ If you experience connection issues:
 2. Check that Bluetooth is enabled and working in Home Assistant
 3. Verify the MAC address if manually configured
 4. Check the Home Assistant logs for detailed error messages
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
