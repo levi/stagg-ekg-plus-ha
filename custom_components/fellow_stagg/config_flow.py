@@ -29,11 +29,11 @@ class FellowStaggConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return await self.async_step_bluetooth()
 
     async def async_step_bluetooth(
-        self, user_input: dict[str, Any] | None = None
+        self, user_input: BluetoothServiceInfoBleak | None = None
     ) -> FlowResult:
         """Handle the bluetooth discovery step."""
         if user_input is not None:
-            address = user_input["address"]
+            address = user_input.address
             await self.async_set_unique_id(address)
             self._abort_if_unique_id_configured()
             return self.async_create_entry(
@@ -50,7 +50,7 @@ class FellowStaggConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._discovered_devices[address] = discovery_info
 
         if not self._discovered_devices:
-            return await self.async_step_manual()
+            return self.async_abort(reason="no_unconfigured_devices")
 
         return self.async_show_form(
             step_id="bluetooth",
@@ -58,10 +58,10 @@ class FellowStaggConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 {
                     vol.Required("address"): vol.In(
                         {
-                            service_info.address: f"{service_info.name} ({service_info.address})"
-                            for service_info in self._discovered_devices.values()
+                            address: f"{discovery_info.name} ({address})"
+                            for address, discovery_info in self._discovered_devices.items()
                         }
-                    )
+                    ),
                 }
             ),
         )

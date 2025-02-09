@@ -37,6 +37,7 @@ class FellowStaggCoordinator(ActiveBluetoothProcessorCoordinator):
         self.kettle_client = KettleBLEClient(address)
         self.address = address
         self.last_poll_data = None
+        self._last_service_info = None
 
     @property
     def device_info(self):
@@ -51,8 +52,8 @@ class FellowStaggCoordinator(ActiveBluetoothProcessorCoordinator):
     @asynccontextmanager
     async def client_session(self):
         """Context manager for BLE client connection."""
-        if self.last_service_info and self.last_service_info.connectable:
-            device = self.last_service_info.device
+        if self._last_service_info and self._last_service_info.connectable:
+            device = self._last_service_info.device
         elif device := async_ble_device_from_address(self.hass, self.address, True):
             pass
         else:
@@ -68,10 +69,16 @@ class FellowStaggCoordinator(ActiveBluetoothProcessorCoordinator):
         last_poll: float | None,
     ) -> bool:
         """Check if we should poll the device."""
+        self._last_service_info = service_info
         return True
 
-    async def _async_poll(self, service_info: BluetoothServiceInfoBleak):
+    async def _async_poll(self, service_info: BluetoothServiceInfoBleak | None = None) -> dict | None:
         """Poll the device for data."""
+        service_info = service_info or self._last_service_info
+        if not service_info:
+            _LOGGER.debug("No service info available for polling")
+            return None
+
         _LOGGER.debug("Polling Fellow Stagg kettle %s", service_info.device.address)
         if service_info.connectable:
             device = service_info.device
@@ -96,8 +103,9 @@ class FellowStaggCoordinator(ActiveBluetoothProcessorCoordinator):
             )
             return None
 
-    def _process_update(self, service_info: BluetoothServiceInfoBleak):
+    def _process_update(self, service_info: BluetoothServiceInfoBleak) -> dict | None:
         """Process a Bluetooth update."""
+        self._last_service_info = service_info
         return self.last_poll_data if hasattr(self, "last_poll_data") else None
 
 

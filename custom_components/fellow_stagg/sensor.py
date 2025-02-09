@@ -23,21 +23,25 @@ from .const import DOMAIN
 @dataclass
 class FellowStaggSensorEntityDescription(SensorEntityDescription):
     """Description of a Fellow Stagg sensor."""
+    pass
 
-    # Use field with repr=False to exclude from serialization
-    value_fn: Callable[[dict[str, Any] | None], Any | None] = field(
-        default=None, repr=False, compare=False
-    )
-
+# Define value functions separately from descriptions
+SENSOR_VALUE_FUNCTIONS = {
+    "power": lambda data: "On" if data and data.get("power") else "Off",
+    "current_temp": lambda data: data.get("current_temp") if data else None,
+    "target_temp": lambda data: data.get("target_temp") if data else None,
+    "hold": lambda data: "Hold" if data and data.get("hold") else "Normal",
+    "lifted": lambda data: "Lifted" if data and data.get("lifted") else "On Base",
+    "countdown": lambda data: data.get("countdown") if data else None,
+}
 
 def get_sensor_descriptions() -> list[FellowStaggSensorEntityDescription]:
-    """Get sensor descriptions with value functions."""
+    """Get sensor descriptions."""
     return [
         FellowStaggSensorEntityDescription(
             key="power",
             name="Power",
             icon="mdi:power",
-            value_fn=lambda data: "On" if data and data.get("power") else "Off",
         ),
         FellowStaggSensorEntityDescription(
             key="current_temp",
@@ -45,7 +49,6 @@ def get_sensor_descriptions() -> list[FellowStaggSensorEntityDescription]:
             icon="mdi:thermometer",
             device_class=SensorDeviceClass.TEMPERATURE,
             native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
-            value_fn=lambda data: data.get("current_temp") if data else None,
         ),
         FellowStaggSensorEntityDescription(
             key="target_temp",
@@ -53,26 +56,22 @@ def get_sensor_descriptions() -> list[FellowStaggSensorEntityDescription]:
             icon="mdi:thermometer",
             device_class=SensorDeviceClass.TEMPERATURE,
             native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
-            value_fn=lambda data: data.get("target_temp") if data else None,
         ),
         FellowStaggSensorEntityDescription(
             key="hold",
             name="Hold Mode",
             icon="mdi:timer",
-            value_fn=lambda data: "Hold" if data and data.get("hold") else "Normal",
         ),
         FellowStaggSensorEntityDescription(
             key="lifted",
             name="Kettle Position",
             icon="mdi:cup",
-            value_fn=lambda data: "Lifted" if data and data.get("lifted") else "On Base",
         ),
         FellowStaggSensorEntityDescription(
             key="countdown",
             name="Countdown",
             icon="mdi:timer",
             native_unit_of_measurement="s",
-            value_fn=lambda data: data.get("countdown") if data else None,
         ),
     ]
 
@@ -93,8 +92,9 @@ def sensor_update_to_bluetooth_data_update(
         key = PassiveBluetoothEntityKey(key=description.key, device_id=None)
         entity_descriptions[key] = description
         entity_names[key] = description.name
-        if description.value_fn:
-            entity_data[key] = description.value_fn(data)
+        value_fn = SENSOR_VALUE_FUNCTIONS.get(description.key)
+        if value_fn:
+            entity_data[key] = value_fn(data)
 
     return PassiveBluetoothDataUpdate(
         devices={},
