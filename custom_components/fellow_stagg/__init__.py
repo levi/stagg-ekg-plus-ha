@@ -68,12 +68,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
             return None
 
+    def _process_update(service_info: BluetoothServiceInfoBleak):
+        """Process a Bluetooth update."""
+        # Return the last polled data
+        return coordinator.last_poll_data if hasattr(coordinator, "last_poll_data") else None
+
     coordinator = ActiveBluetoothProcessorCoordinator(
         hass,
         _LOGGER,
         address=address,
         mode=BluetoothScanningMode.PASSIVE,
-        update_method=lambda x: x,  # We don't process advertisements
+        update_method=_process_update,
         needs_poll_method=_needs_poll,
         poll_method=_async_poll,
         # We will take advertisements from non-connectable devices

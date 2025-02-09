@@ -1,5 +1,5 @@
-from dataclasses import dataclass
-from typing import Any, TypeVar
+from dataclasses import dataclass, field
+from typing import Any, TypeVar, Callable
 
 from homeassistant import config_entries
 from homeassistant.components.bluetooth.passive_update_processor import (
@@ -24,52 +24,61 @@ from .const import DOMAIN
 class FellowStaggSensorEntityDescription(SensorEntityDescription):
     """Description of a Fellow Stagg sensor."""
 
-    value_fn: Any = None
+    # Use field with repr=False to exclude from serialization
+    value_fn: Callable[[dict[str, Any] | None], Any | None] = field(
+        default=None, repr=False, compare=False
+    )
 
 
-SENSOR_DESCRIPTIONS = [
-    FellowStaggSensorEntityDescription(
-        key="power",
-        name="Power",
-        icon="mdi:power",
-        value_fn=lambda data: "On" if data and data.get("power") else "Off",
-    ),
-    FellowStaggSensorEntityDescription(
-        key="current_temp",
-        name="Current Temperature",
-        icon="mdi:thermometer",
-        device_class=SensorDeviceClass.TEMPERATURE,
-        native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
-        value_fn=lambda data: data.get("current_temp") if data else None,
-    ),
-    FellowStaggSensorEntityDescription(
-        key="target_temp",
-        name="Target Temperature",
-        icon="mdi:thermometer",
-        device_class=SensorDeviceClass.TEMPERATURE,
-        native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
-        value_fn=lambda data: data.get("target_temp") if data else None,
-    ),
-    FellowStaggSensorEntityDescription(
-        key="hold",
-        name="Hold Mode",
-        icon="mdi:timer",
-        value_fn=lambda data: "Hold" if data and data.get("hold") else "Normal",
-    ),
-    FellowStaggSensorEntityDescription(
-        key="lifted",
-        name="Kettle Position",
-        icon="mdi:cup",
-        value_fn=lambda data: "Lifted" if data and data.get("lifted") else "On Base",
-    ),
-    FellowStaggSensorEntityDescription(
-        key="countdown",
-        name="Countdown",
-        icon="mdi:timer",
-        native_unit_of_measurement="s",
-        value_fn=lambda data: data.get("countdown") if data else None,
-    ),
-]
+def get_sensor_descriptions() -> list[FellowStaggSensorEntityDescription]:
+    """Get sensor descriptions with value functions."""
+    return [
+        FellowStaggSensorEntityDescription(
+            key="power",
+            name="Power",
+            icon="mdi:power",
+            value_fn=lambda data: "On" if data and data.get("power") else "Off",
+        ),
+        FellowStaggSensorEntityDescription(
+            key="current_temp",
+            name="Current Temperature",
+            icon="mdi:thermometer",
+            device_class=SensorDeviceClass.TEMPERATURE,
+            native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+            value_fn=lambda data: data.get("current_temp") if data else None,
+        ),
+        FellowStaggSensorEntityDescription(
+            key="target_temp",
+            name="Target Temperature",
+            icon="mdi:thermometer",
+            device_class=SensorDeviceClass.TEMPERATURE,
+            native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+            value_fn=lambda data: data.get("target_temp") if data else None,
+        ),
+        FellowStaggSensorEntityDescription(
+            key="hold",
+            name="Hold Mode",
+            icon="mdi:timer",
+            value_fn=lambda data: "Hold" if data and data.get("hold") else "Normal",
+        ),
+        FellowStaggSensorEntityDescription(
+            key="lifted",
+            name="Kettle Position",
+            icon="mdi:cup",
+            value_fn=lambda data: "Lifted" if data and data.get("lifted") else "On Base",
+        ),
+        FellowStaggSensorEntityDescription(
+            key="countdown",
+            name="Countdown",
+            icon="mdi:timer",
+            native_unit_of_measurement="s",
+            value_fn=lambda data: data.get("countdown") if data else None,
+        ),
+    ]
+
+
+# Get sensor descriptions once at module load
+SENSOR_DESCRIPTIONS = get_sensor_descriptions()
 
 
 def sensor_update_to_bluetooth_data_update(
