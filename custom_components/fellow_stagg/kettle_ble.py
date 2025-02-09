@@ -11,21 +11,15 @@ class KettleBLEClient:
 
     def __init__(self, address: str):
         self.address = address
-        # In a production integration you might allow overriding these.
         self.service_uuid = SERVICE_UUID
         self.char_uuid = CHAR_UUID
         self.init_sequence = INIT_SEQUENCE
 
     async def async_poll(self, ble_device):
-        """Connect to the kettle, send init command, and return parsed state.
-
-        This function uses an active connection (with a timeout of 10 seconds)
-        to write the init sequence and then waits for notifications.
-        """
+        """Connect to the kettle, send init command, and return parsed state."""
         _LOGGER.debug("Connecting to kettle at %s", self.address)
         async with BleakClient(ble_device, timeout=10.0) as client:
             try:
-                # Write the init command
                 _LOGGER.debug(
                     "Writing init sequence to characteristic %s", self.char_uuid
                 )
@@ -34,7 +28,6 @@ class KettleBLEClient:
                 _LOGGER.error("Error writing init sequence: %s", err)
                 return {}
 
-            # Container for notifications
             notifications = []
 
             def notification_handler(sender, data):
@@ -43,32 +36,30 @@ class KettleBLEClient:
 
             try:
                 await client.start_notify(self.char_uuid, notification_handler)
-                # Wait a short period to collect notifications.
                 await asyncio.sleep(2.0)
                 await client.stop_notify(self.char_uuid)
             except Exception as err:
                 _LOGGER.error("Error during notifications: %s", err)
                 return {}
 
-            # Parse notifications into a single state dictionary.
             state = self.parse_notifications(notifications)
             return state
 
     def parse_notifications(self, notifications):
-        """Parse a list of BLE notification payloads into kettle state.
+        """Parse BLE notification payloads into kettle state.
 
-        Each payload is expected to begin with 0xef 0xdd and then a frame:
-          - Byte 0-1: Magic bytes (0xef, 0xdd)
+        Expected frame format:
+          - Bytes 0-1: Magic (0xef, 0xdd)
           - Byte 2: Message type
           - Subsequent bytes: payload
 
-        Based on the reverse engineering:
-          - Type 0: Power state (payload[0]: 0 for off, 1 for on)
-          - Type 1: Hold state (payload[0]: 0 for off, 1 for on)
-          - Type 2: Target temperature & unit (payload[0]=temp, payload[1]=unit, 1 = Fahrenheit, else Celsius)
-          - Type 3: Current temperature & unit (payload[0]=temp, payload[1]=unit)
-          - Type 4: Countdown (payload[0])
-          - Type 8: Kettle lifted (payload[0]: 0 means lifted, 1 means on base)
+        Reverse engineered types:
+          - Type 0: Power (1 = on, 0 = off)
+          - Type 1: Hold (1 = hold, 0 = normal)
+          - Type 2: Target temperature (byte 0: temp, byte 1: unit, 1 = F, else C)
+          - Type 3: Current temperature (byte 0: temp, byte 1: unit)
+          - Type 4: Countdown (byte 0)
+          - Type 8: Kettle position (0 = lifted, 1 = on base)
         """
         state = {}
         for data in notifications:
@@ -77,7 +68,6 @@ class KettleBLEClient:
             if data[0] != 0xEF or data[1] != 0xDD:
                 continue
             msg_type = data[2]
-            # For each type, check the payload length before parsing
             if msg_type == 0 and len(data) >= 4:
                 state["power"] = data[3] == 1
             elif msg_type == 1 and len(data) >= 4:
@@ -91,7 +81,6 @@ class KettleBLEClient:
             elif msg_type == 4 and len(data) >= 4:
                 state["countdown"] = data[3]
             elif msg_type == 8 and len(data) >= 4:
-                # If payload is 0, kettle is lifted; if 1, on base.
                 state["lifted"] = data[3] == 0
             else:
                 _LOGGER.debug(

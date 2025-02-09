@@ -44,7 +44,6 @@ class FellowStaggPowerSensor(FellowStaggBaseSensor):
 
 class FellowStaggCurrentTempSensor(FellowStaggBaseSensor):
     def __init__(self, coordinator):
-        # Default to Fahrenheit unit if not provided in data.
         super().__init__(
             coordinator, "Fellow Stagg Current Temperature", "mdi:thermometer", "°F"
         )

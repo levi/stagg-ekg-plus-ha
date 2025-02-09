@@ -26,11 +26,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     kettle_client = KettleBLEClient(address)
 
     def needs_poll(service_info, last_poll):
-        # In a real integration you might use more sophisticated logic.
+        # For simplicity, always poll
         return True
 
     async def poll_method(service_info):
-        # Try to obtain a connectable BLE device from the HA Bluetooth manager.
         ble_device = async_ble_device_from_address(
             hass, service_info.device.address, connectable=True
         )
@@ -45,14 +44,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER,
         address=address,
         mode=BluetoothScanningMode.PASSIVE,
-        update_method=lambda update: update,  # We do not further process advertisement data
+        update_method=lambda update: update,  # In this simple example we do not process advertisements
         needs_poll_method=needs_poll,
         poll_method=poll_method,
-        connectable=False,  # We allow non-connectable advertisement flows
+        connectable=False,
     )
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
-    # Forward setup to sensor platform
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(coordinator.async_start)
     return True
