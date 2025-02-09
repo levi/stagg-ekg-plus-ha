@@ -1,0 +1,9 @@
+{
+  "domain": "stagg_ekg",
+  "name": "Fellow Stagg EKG+",
+  "version": "0.1",
+  "documentation": "https://github.com/levi/stagg-ekg-plus",
+  "dependencies": ["bluetooth_adapters"],
+  "requirements": ["bleak"],
+  "codeowners": ["@levi"]
+}
