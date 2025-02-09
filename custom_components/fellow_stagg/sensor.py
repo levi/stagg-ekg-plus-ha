@@ -1,91 +1,128 @@
-from homeassistant.components.sensor import SensorEntity
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from dataclasses import dataclass
+from typing import Any, TypeVar
+
+from homeassistant import config_entries
+from homeassistant.components.bluetooth.passive_update_processor import (
+    PassiveBluetoothDataProcessor,
+    PassiveBluetoothDataUpdate,
+    PassiveBluetoothEntityKey,
+    PassiveBluetoothProcessorEntity,
+)
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorEntityDescription,
+)
+from homeassistant.const import UnitOfTemperature
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
 from .const import DOMAIN
 
 
-async def async_setup_entry(hass, entry, async_add_entities):
-    """Set up sensors for Fellow Stagg kettle."""
+@dataclass
+class FellowStaggSensorEntityDescription(SensorEntityDescription):
+    """Description of a Fellow Stagg sensor."""
+
+    value_fn: Any = None
+
+
+SENSOR_DESCRIPTIONS = [
+    FellowStaggSensorEntityDescription(
+        key="power",
+        name="Power",
+        icon="mdi:power",
+        value_fn=lambda data: "On" if data and data.get("power") else "Off",
+    ),
+    FellowStaggSensorEntityDescription(
+        key="current_temp",
+        name="Current Temperature",
+        icon="mdi:thermometer",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+        value_fn=lambda data: data.get("current_temp") if data else None,
+    ),
+    FellowStaggSensorEntityDescription(
+        key="target_temp",
+        name="Target Temperature",
+        icon="mdi:thermometer",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+        value_fn=lambda data: data.get("target_temp") if data else None,
+    ),
+    FellowStaggSensorEntityDescription(
+        key="hold",
+        name="Hold Mode",
+        icon="mdi:timer",
+        value_fn=lambda data: "Hold" if data and data.get("hold") else "Normal",
+    ),
+    FellowStaggSensorEntityDescription(
+        key="lifted",
+        name="Kettle Position",
+        icon="mdi:cup",
+        value_fn=lambda data: "Lifted" if data and data.get("lifted") else "On Base",
+    ),
+    FellowStaggSensorEntityDescription(
+        key="countdown",
+        name="Countdown",
+        icon="mdi:timer",
+        native_unit_of_measurement="s",
+        value_fn=lambda data: data.get("countdown") if data else None,
+    ),
+]
+
+
+def sensor_update_to_bluetooth_data_update(
+    data: dict[str, Any] | None,
+) -> PassiveBluetoothDataUpdate:
+    """Convert sensor update to Bluetooth data update."""
+    entity_descriptions = {}
+    entity_data = {}
+    entity_names = {}
+
+    for description in SENSOR_DESCRIPTIONS:
+        key = PassiveBluetoothEntityKey(key=description.key, device_id=None)
+        entity_descriptions[key] = description
+        entity_names[key] = description.name
+        if description.value_fn:
+            entity_data[key] = description.value_fn(data)
+
+    return PassiveBluetoothDataUpdate(
+        devices={},
+        entity_descriptions=entity_descriptions,
+        entity_data=entity_data,
+        entity_names=entity_names,
+    )
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: config_entries.ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up the Fellow Stagg BLE sensors."""
     coordinator = hass.data[DOMAIN][entry.entry_id]
-    entities = [
-        FellowStaggPowerSensor(coordinator),
-        FellowStaggCurrentTempSensor(coordinator),
-        FellowStaggTargetTempSensor(coordinator),
-        FellowStaggHoldSensor(coordinator),
-        FellowStaggLiftedSensor(coordinator),
-        FellowStaggCountdownSensor(coordinator),
-    ]
-    async_add_entities(entities)
-
-
-class FellowStaggBaseSensor(CoordinatorEntity, SensorEntity):
-    """Base sensor for Fellow Stagg kettle."""
-
-    _attr_should_poll = False
-
-    def __init__(self, coordinator, name, icon, unit=None):
-        super().__init__(coordinator)
-        self._attr_name = name
-        self._attr_icon = icon
-        self._unit = unit
-
-    @property
-    def native_unit_of_measurement(self):
-        return self._unit
-
-
-class FellowStaggPowerSensor(FellowStaggBaseSensor):
-    def __init__(self, coordinator):
-        super().__init__(coordinator, "Fellow Stagg Power", "mdi:power")
-
-    @property
-    def native_value(self):
-        return "On" if self.coordinator.data.get("power") else "Off"
-
-
-class FellowStaggCurrentTempSensor(FellowStaggBaseSensor):
-    def __init__(self, coordinator):
-        super().__init__(
-            coordinator, "Fellow Stagg Current Temperature", "mdi:thermometer", "°F"
+    processor = PassiveBluetoothDataProcessor[float | int | str | None, None](
+        sensor_update_to_bluetooth_data_update
+    )
+    entry.async_on_unload(
+        processor.async_add_entities_listener(
+            FellowStaggBluetoothSensorEntity,
+            async_add_entities,
         )
+    )
+    entry.async_on_unload(coordinator.async_register_processor(processor))
+
+
+class FellowStaggBluetoothSensorEntity(
+    PassiveBluetoothProcessorEntity[
+        PassiveBluetoothDataProcessor[float | int | str | None, None]
+    ],
+    SensorEntity,
+):
+    """Representation of a Fellow Stagg Bluetooth sensor."""
 
     @property
-    def native_value(self):
-        return self.coordinator.data.get("current_temp")
-
-
-class FellowStaggTargetTempSensor(FellowStaggBaseSensor):
-    def __init__(self, coordinator):
-        super().__init__(
-            coordinator, "Fellow Stagg Target Temperature", "mdi:thermometer", "°F"
-        )
-
-    @property
-    def native_value(self):
-        return self.coordinator.data.get("target_temp")
-
-
-class FellowStaggHoldSensor(FellowStaggBaseSensor):
-    def __init__(self, coordinator):
-        super().__init__(coordinator, "Fellow Stagg Hold Mode", "mdi:timer")
-
-    @property
-    def native_value(self):
-        return "Hold" if self.coordinator.data.get("hold") else "Normal"
-
-
-class FellowStaggLiftedSensor(FellowStaggBaseSensor):
-    def __init__(self, coordinator):
-        super().__init__(coordinator, "Fellow Stagg Kettle Position", "mdi:cup")
-
-    @property
-    def native_value(self):
-        return "Lifted" if self.coordinator.data.get("lifted") else "On Base"
-
-
-class FellowStaggCountdownSensor(FellowStaggBaseSensor):
-    def __init__(self, coordinator):
-        super().__init__(coordinator, "Fellow Stagg Countdown", "mdi:timer", "s")
-
-    @property
-    def native_value(self):
-        return self.coordinator.data.get("countdown")
+    def native_value(self) -> float | int | str | None:
+        """Return the native value."""
+        return self.processor.entity_data.get(self.entity_key)

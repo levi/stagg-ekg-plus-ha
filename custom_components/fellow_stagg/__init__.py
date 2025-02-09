@@ -1,12 +1,13 @@
 import logging
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, CoreState
 from homeassistant.components.bluetooth import (
     BluetoothScanningMode,
+    BluetoothServiceInfoBleak,
     async_ble_device_from_address,
 )
 from homeassistant.components.bluetooth.active_update_processor import (
-    ActiveBluetoothProcessorCoordinator,
+    ActiveBluetoothProcessorCoordinator
 )
 from .const import DOMAIN
 from .kettle_ble import KettleBLEClient
@@ -25,34 +26,66 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     kettle_client = KettleBLEClient(address)
 
-    def needs_poll(service_info, last_poll):
-        # For simplicity, always poll
+    def _needs_poll(
+        service_info: BluetoothServiceInfoBleak, last_poll: float | None
+    ) -> bool:
+        """Check if we should poll the device."""
+        # Always poll when we get an advertisement since we need
+        # to actively connect to get the data
         return True
 
-    async def poll_method(service_info):
-        ble_device = async_ble_device_from_address(
-            hass, service_info.device.address, connectable=True
+    async def _async_poll(service_info: BluetoothServiceInfoBleak):
+        """Poll the device for data."""
+        _LOGGER.debug(
+            "Polling Fellow Stagg kettle %s",
+            service_info.device.address,
         )
-        if ble_device is None:
-            raise RuntimeError(
-                f"No connectable BLE device found for {service_info.device.address}"
+        if service_info.connectable:
+            connectable_device = service_info.device
+        elif device := async_ble_device_from_address(
+            hass, service_info.device.address, True
+        ):
+            connectable_device = device
+        else:
+            _LOGGER.error(
+                "No connectable device found for %s",
+                service_info.device.address,
             )
-        return await kettle_client.async_poll(ble_device)
+            return None
+        try:
+            data = await kettle_client.async_poll(connectable_device)
+            _LOGGER.debug(
+                "Polled data from kettle %s: %s",
+                service_info.device.address,
+                data,
+            )
+            return data
+        except Exception as e:
+            _LOGGER.error(
+                "Error polling Fellow Stagg kettle %s: %s",
+                service_info.device.address,
+                str(e),
+            )
+            return None
 
     coordinator = ActiveBluetoothProcessorCoordinator(
         hass,
         _LOGGER,
         address=address,
         mode=BluetoothScanningMode.PASSIVE,
-        update_method=lambda update: update,  # In this simple example we do not process advertisements
-        needs_poll_method=needs_poll,
-        poll_method=poll_method,
+        update_method=lambda x: x,  # We don't process advertisements
+        needs_poll_method=_needs_poll,
+        poll_method=_async_poll,
+        # We will take advertisements from non-connectable devices
+        # since we will trade the BLEDevice for a connectable one
+        # if we need to poll it
         connectable=False,
     )
+
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    entry.async_on_unload(coordinator.async_start)
+    entry.async_on_unload(coordinator.async_start())
     return True
 
 
