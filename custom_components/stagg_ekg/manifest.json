@@ -1,0 +1,16 @@
+{
+  "domain": "stagg_ekg",
+  "name": "Stagg EKG+",
+  "bluetooth": [
+    {
+      "service_uuid": "00001820-0000-1000-8000-00805f9b34fb"
+    }
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/levi/stagg-ekg-plus",
+  "dependencies": ["bluetooth"],
+  "codeowners": ["@levi"],
+  "iot_class": "local_polling",
+  "version": "1.0.0",
+  "requirements": ["bluepy==1.3.0"]
+} 
