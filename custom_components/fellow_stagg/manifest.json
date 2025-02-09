@@ -1,10 +1,10 @@
 {
   "domain": "fellow_stagg",
   "name": "Fellow Stagg EKG+",
-  "version": "0.1",
-  "documentation": "https://github.com/levi/stagg-ekg-plus",
-  "dependencies": ["bluetooth_adapters"],
-  "requirements": ["bleak"],
   "codeowners": ["@levi"],
-  "iot_class": "local_push"
+  "dependencies": ["bluetooth_adapters"],
+  "documentation": "https://github.com/levi/stagg-ekg-plus",
+  "iot_class": "local_push",
+  "requirements": ["bleak"],
+  "version": "0.1"
 }
