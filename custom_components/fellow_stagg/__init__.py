@@ -1,4 +1,5 @@
 import logging
+from contextlib import asynccontextmanager
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, CoreState
 from homeassistant.components.bluetooth import (
@@ -9,12 +10,95 @@ from homeassistant.components.bluetooth import (
 from homeassistant.components.bluetooth.active_update_processor import (
     ActiveBluetoothProcessorCoordinator
 )
+from bleak import BleakClient
 from .const import DOMAIN
 from .kettle_ble import KettleBLEClient
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["sensor"]
+PLATFORMS = ["sensor", "switch", "number"]
+
+
+class FellowStaggCoordinator(ActiveBluetoothProcessorCoordinator):
+    """Data coordinator for Fellow Stagg kettle."""
+
+    def __init__(self, hass: HomeAssistant, address: str):
+        """Initialize coordinator."""
+        super().__init__(
+            hass,
+            _LOGGER,
+            address=address,
+            mode=BluetoothScanningMode.PASSIVE,
+            update_method=self._process_update,
+            needs_poll_method=self._needs_poll,
+            poll_method=self._async_poll,
+            connectable=False,
+        )
+        self.kettle_client = KettleBLEClient(address)
+        self.address = address
+        self.last_poll_data = None
+
+    @property
+    def device_info(self):
+        """Return device info."""
+        return {
+            "identifiers": {(DOMAIN, self.address)},
+            "name": f"Fellow Stagg EKG+ ({self.address})",
+            "manufacturer": "Fellow",
+            "model": "Stagg EKG+",
+        }
+
+    @asynccontextmanager
+    async def client_session(self):
+        """Context manager for BLE client connection."""
+        if self.last_service_info and self.last_service_info.connectable:
+            device = self.last_service_info.device
+        elif device := async_ble_device_from_address(self.hass, self.address, True):
+            pass
+        else:
+            raise RuntimeError(f"No connectable device found for {self.address}")
+
+        async with BleakClient(device, timeout=10.0) as client:
+            await self.kettle_client.authenticate(client)
+            yield client
+
+    def _needs_poll(
+        self,
+        service_info: BluetoothServiceInfoBleak,
+        last_poll: float | None,
+    ) -> bool:
+        """Check if we should poll the device."""
+        return True
+
+    async def _async_poll(self, service_info: BluetoothServiceInfoBleak):
+        """Poll the device for data."""
+        _LOGGER.debug("Polling Fellow Stagg kettle %s", service_info.device.address)
+        if service_info.connectable:
+            device = service_info.device
+        elif device := async_ble_device_from_address(self.hass, service_info.device.address, True):
+            pass
+        else:
+            _LOGGER.error("No connectable device found for %s", service_info.device.address)
+            return None
+
+        try:
+            async with BleakClient(device, timeout=10.0) as client:
+                await self.kettle_client.authenticate(client)
+                data = await self.kettle_client.async_poll(client)
+                _LOGGER.debug("Polled data from kettle %s: %s", service_info.device.address, data)
+                self.last_poll_data = data
+                return data
+        except Exception as e:
+            _LOGGER.error(
+                "Error polling Fellow Stagg kettle %s: %s",
+                service_info.device.address,
+                str(e),
+            )
+            return None
+
+    def _process_update(self, service_info: BluetoothServiceInfoBleak):
+        """Process a Bluetooth update."""
+        return self.last_poll_data if hasattr(self, "last_poll_data") else None
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -24,69 +108,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.error("No unique ID provided in config entry")
         return False
 
-    kettle_client = KettleBLEClient(address)
-
-    def _needs_poll(
-        service_info: BluetoothServiceInfoBleak, last_poll: float | None
-    ) -> bool:
-        """Check if we should poll the device."""
-        # Always poll when we get an advertisement since we need
-        # to actively connect to get the data
-        return True
-
-    async def _async_poll(service_info: BluetoothServiceInfoBleak):
-        """Poll the device for data."""
-        _LOGGER.debug(
-            "Polling Fellow Stagg kettle %s",
-            service_info.device.address,
-        )
-        if service_info.connectable:
-            connectable_device = service_info.device
-        elif device := async_ble_device_from_address(
-            hass, service_info.device.address, True
-        ):
-            connectable_device = device
-        else:
-            _LOGGER.error(
-                "No connectable device found for %s",
-                service_info.device.address,
-            )
-            return None
-        try:
-            data = await kettle_client.async_poll(connectable_device)
-            _LOGGER.debug(
-                "Polled data from kettle %s: %s",
-                service_info.device.address,
-                data,
-            )
-            return data
-        except Exception as e:
-            _LOGGER.error(
-                "Error polling Fellow Stagg kettle %s: %s",
-                service_info.device.address,
-                str(e),
-            )
-            return None
-
-    def _process_update(service_info: BluetoothServiceInfoBleak):
-        """Process a Bluetooth update."""
-        # Return the last polled data
-        return coordinator.last_poll_data if hasattr(coordinator, "last_poll_data") else None
-
-    coordinator = ActiveBluetoothProcessorCoordinator(
-        hass,
-        _LOGGER,
-        address=address,
-        mode=BluetoothScanningMode.PASSIVE,
-        update_method=_process_update,
-        needs_poll_method=_needs_poll,
-        poll_method=_async_poll,
-        # We will take advertisements from non-connectable devices
-        # since we will trade the BLEDevice for a connectable one
-        # if we need to poll it
-        connectable=False,
-    )
-
+    coordinator = FellowStaggCoordinator(hass, address)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -96,7 +118,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload Fellow Stagg integration."""
-    coordinator = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
-    if coordinator:
+    if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+        coordinator = hass.data[DOMAIN].pop(entry.entry_id)
         await coordinator.async_stop()
-    return True
+    return unload_ok

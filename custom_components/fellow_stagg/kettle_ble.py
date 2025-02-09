@@ -15,35 +15,29 @@ class KettleBLEClient:
         self.char_uuid = CHAR_UUID
         self.init_sequence = INIT_SEQUENCE
 
-    async def async_poll(self, ble_device):
+    async def authenticate(self, client: BleakClient) -> None:
+        """Authenticate with the kettle."""
+        _LOGGER.debug("Authenticating with kettle")
+        await client.write_gatt_char(self.char_uuid, self.init_sequence, response=False)
+
+    async def async_poll(self, client: BleakClient) -> dict:
         """Connect to the kettle, send init command, and return parsed state."""
-        _LOGGER.debug("Connecting to kettle at %s", self.address)
-        async with BleakClient(ble_device, timeout=10.0) as client:
-            try:
-                _LOGGER.debug(
-                    "Writing init sequence to characteristic %s", self.char_uuid
-                )
-                await client.write_gatt_char(self.char_uuid, self.init_sequence)
-            except Exception as err:
-                _LOGGER.error("Error writing init sequence: %s", err)
-                return {}
+        _LOGGER.debug("Polling kettle state")
+        notifications = []
 
-            notifications = []
+        def notification_handler(sender, data):
+            _LOGGER.debug("Received notification: %s", data.hex())
+            notifications.append(data)
 
-            def notification_handler(sender, data):
-                _LOGGER.debug("Received notification: %s", data.hex())
-                notifications.append(data)
+        try:
+            await client.start_notify(self.char_uuid, notification_handler)
+            await asyncio.sleep(2.0)
+            await client.stop_notify(self.char_uuid)
+        except Exception as err:
+            _LOGGER.error("Error during notifications: %s", err)
+            return {}
 
-            try:
-                await client.start_notify(self.char_uuid, notification_handler)
-                await asyncio.sleep(2.0)
-                await client.stop_notify(self.char_uuid)
-            except Exception as err:
-                _LOGGER.error("Error during notifications: %s", err)
-                return {}
-
-            state = self.parse_notifications(notifications)
-            return state
+        return self.parse_notifications(notifications)
 
     def parse_notifications(self, notifications):
         """Parse BLE notification payloads into kettle state.
@@ -87,3 +81,22 @@ class KettleBLEClient:
                     "Unhandled message type %s with data %s", msg_type, data.hex()
                 )
         return state
+
+    async def async_turn_on(self, client: BleakClient) -> None:
+        """Turn on the kettle."""
+        _LOGGER.debug("Turning kettle on")
+        await client.write_gatt_char(self.char_uuid, bytes.fromhex("efdd0a0000010100"), response=False)
+
+    async def async_turn_off(self, client: BleakClient) -> None:
+        """Turn off the kettle."""
+        _LOGGER.debug("Turning kettle off")
+        await client.write_gatt_char(self.char_uuid, bytes.fromhex("efdd0a0400000400"), response=False)
+
+    async def async_set_temperature(self, client: BleakClient, temp: int) -> None:
+        """Set the target temperature (Fahrenheit)."""
+        if temp < 104 or temp > 212:
+            raise ValueError("Temperature must be between 104°F and 212°F")
+        
+        _LOGGER.debug("Setting temperature to %d°F", temp)
+        command = f"efdd0a0001{hex(temp)[2:]:0>2}{hex(temp)[2:]:0>2}01"
+        await client.write_gatt_char(self.char_uuid, bytes.fromhex(command), response=False)
