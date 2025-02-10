@@ -11,11 +11,9 @@ from homeassistant.components.sensor import (
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import (
-    CoordinatorEntity,
-    DataUpdateCoordinator,
-)
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from . import FellowStaggDataUpdateCoordinator
 from .const import DOMAIN
 
 
@@ -85,7 +83,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the Fellow Stagg sensors."""
-    coordinator: DataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator: FellowStaggDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
 
     async_add_entities(
         FellowStaggSensor(coordinator, description)
@@ -93,26 +91,29 @@ async def async_setup_entry(
     )
 
 
-class FellowStaggSensor(CoordinatorEntity[DataUpdateCoordinator[dict[str, Any]]], SensorEntity):
+class FellowStaggSensor(CoordinatorEntity[FellowStaggDataUpdateCoordinator], SensorEntity):
     """Fellow Stagg sensor."""
 
     entity_description: FellowStaggSensorEntityDescription
+    _attr_has_entity_name = True
 
     def __init__(
         self,
-        coordinator: DataUpdateCoordinator[dict[str, Any]],
+        coordinator: FellowStaggDataUpdateCoordinator,
         description: FellowStaggSensorEntityDescription,
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
         self.entity_description = description
-        self._attr_unique_id = f"{coordinator.name}_{description.key}"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, coordinator.name)},
-            "name": "Fellow Stagg EKG+",
-            "manufacturer": "Fellow",
-            "model": "Stagg EKG+",
-        }
+        self._attr_unique_id = f"{coordinator._address}_{description.key}"
+        self._attr_device_info = coordinator.device_info
+
+        # Update unit of measurement based on kettle's current units
+        if description.device_class == SensorDeviceClass.TEMPERATURE:
+            is_fahrenheit = coordinator.data.get("units") == "F"
+            self._attr_native_unit_of_measurement = (
+                UnitOfTemperature.FAHRENHEIT if is_fahrenheit else UnitOfTemperature.CELSIUS
+            )
 
     @property
     def native_value(self) -> str | None:
