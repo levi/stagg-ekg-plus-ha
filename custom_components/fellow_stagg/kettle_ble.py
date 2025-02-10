@@ -75,7 +75,6 @@ class KettleBLEClient:
             notifications = []
 
             def notification_handler(sender, data):
-                _LOGGER.debug("Received notification: %s", data.hex())
                 notifications.append(data)
 
             try:
@@ -116,13 +115,13 @@ class KettleBLEClient:
         if fahrenheit:
             if temp > 212:
                 temp = 212
-            if temp < 160:  # Note: Changed from 104 to match C++ code
-                temp = 160
+            if temp < 104:
+                temp = 104
         else:
             if temp > 100:
                 temp = 100
-            if temp < 65:  # Note: Changed from 40 to match C++ code
-                temp = 65
+            if temp < 40:
+                temp = 40
 
         try:
             await self._ensure_connected(ble_device)

@@ -26,12 +26,11 @@ class FellowStaggPowerSwitch(SwitchEntity):
 
   _attr_has_entity_name = True
   _attr_name = "Power"
-  _attr_entity_category = EntityCategory.CONTROL
 
   def __init__(self, coordinator: FellowStaggDataUpdateCoordinator) -> None:
     """Initialize the switch."""
     self.coordinator = coordinator
-    self._attr_unique_id = f"{coordinator.ble_device.address}_power"
+    self._attr_unique_id = f"{coordinator._address}_power"
     self._attr_device_info = coordinator.device_info
 
   @property

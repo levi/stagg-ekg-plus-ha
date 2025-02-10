@@ -30,24 +30,23 @@ class FellowStaggTargetTemperature(NumberEntity):
 
   _attr_has_entity_name = True
   _attr_name = "Target Temperature"
-  _attr_entity_category = EntityCategory.CONTROL
   _attr_mode = NumberMode.BOX
   _attr_native_step = 1.0
 
   def __init__(self, coordinator: FellowStaggDataUpdateCoordinator) -> None:
     """Initialize the number."""
     self.coordinator = coordinator
-    self._attr_unique_id = f"{coordinator.ble_device.address}_target_temp"
+    self._attr_unique_id = f"{coordinator._address}_target_temp"
     self._attr_device_info = coordinator.device_info
     
     # Set temperature range based on units
     is_fahrenheit = coordinator.data.get("units") == "F"
     if is_fahrenheit:
-      self._attr_native_min_value = 160
+      self._attr_native_min_value = 104
       self._attr_native_max_value = 212
       self._attr_native_unit_of_measurement = UnitOfTemperature.FAHRENHEIT
     else:
-      self._attr_native_min_value = 65
+      self._attr_native_min_value = 40
       self._attr_native_max_value = 100
       self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
 
