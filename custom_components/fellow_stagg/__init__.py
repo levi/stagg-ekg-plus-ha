@@ -7,7 +7,7 @@ from homeassistant.components.bluetooth import (
     async_ble_device_from_address,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
+from homeassistant.const import Platform, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
@@ -19,8 +19,14 @@ from .kettle_ble import KettleBLEClient
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.SWITCH, Platform.NUMBER]
+PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.SWITCH, Platform.NUMBER, Platform.WATER_HEATER]
 POLLING_INTERVAL = timedelta(seconds=5)  # Poll every 5 seconds (minimum allowed)
+
+# Temperature ranges for the kettle
+MIN_TEMP_F = 104
+MAX_TEMP_F = 212
+MIN_TEMP_C = 40
+MAX_TEMP_C = 100
 
 
 class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator):
@@ -44,6 +50,21 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator):
       manufacturer="Fellow",
       model="Stagg EKG+",
     )
+
+  @property
+  def temperature_unit(self) -> str:
+    """Get the current temperature unit."""
+    return UnitOfTemperature.FAHRENHEIT if self.data and self.data.get("units") == "F" else UnitOfTemperature.CELSIUS
+
+  @property
+  def min_temp(self) -> float:
+    """Get the minimum temperature based on current units."""
+    return MIN_TEMP_F if self.temperature_unit == UnitOfTemperature.FAHRENHEIT else MIN_TEMP_C
+
+  @property
+  def max_temp(self) -> float:
+    """Get the maximum temperature based on current units."""
+    return MAX_TEMP_F if self.temperature_unit == UnitOfTemperature.FAHRENHEIT else MAX_TEMP_C
 
   async def _async_update_data(self) -> dict[str, Any] | None:
     """Fetch data from the kettle."""

@@ -44,18 +44,11 @@ class FellowStaggTargetTemperature(NumberEntity):
     self._attr_unique_id = f"{coordinator._address}_target_temp"
     self._attr_device_info = coordinator.device_info
     
-    # Set temperature range based on units
-    is_fahrenheit = coordinator.data.get("units") == "F"
-    _LOGGER.debug("Initializing target temp with units: %s", "F" if is_fahrenheit else "C")
+    _LOGGER.debug("Initializing target temp with units: %s", coordinator.temperature_unit)
     
-    if is_fahrenheit:
-      self._attr_native_min_value = 104
-      self._attr_native_max_value = 212
-      self._attr_native_unit_of_measurement = UnitOfTemperature.FAHRENHEIT
-    else:
-      self._attr_native_min_value = 40
-      self._attr_native_max_value = 100
-      self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    self._attr_native_min_value = coordinator.min_temp
+    self._attr_native_max_value = coordinator.max_temp
+    self._attr_native_unit_of_measurement = coordinator.temperature_unit
     
     _LOGGER.debug(
       "Target temp range set to: %s°%s - %s°%s",
@@ -69,22 +62,21 @@ class FellowStaggTargetTemperature(NumberEntity):
   def native_value(self) -> float | None:
     """Return the current target temperature."""
     value = self.coordinator.data.get("target_temp")
-    _LOGGER.debug("Target temperature read as: %s°%s", value, self._attr_native_unit_of_measurement)
+    _LOGGER.debug("Target temperature read as: %s°%s", value, self.coordinator.temperature_unit)
     return value
 
   async def async_set_native_value(self, value: float) -> None:
     """Set new target temperature."""
-    is_fahrenheit = self.coordinator.data.get("units") == "F"
     _LOGGER.debug(
       "Setting target temperature to %s°%s",
       value,
-      "F" if is_fahrenheit else "C"
+      self.coordinator.temperature_unit
     )
     
     await self.coordinator.kettle.async_set_temperature(
       self.coordinator.ble_device,
       int(value),
-      fahrenheit=is_fahrenheit
+      fahrenheit=self.coordinator.temperature_unit == UnitOfTemperature.FAHRENHEIT
     )
     _LOGGER.debug("Target temperature command sent, waiting before refresh")
     # Give the kettle a moment to update its internal state
