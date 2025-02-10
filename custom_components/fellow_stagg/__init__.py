@@ -62,6 +62,17 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator):
         self._address,
         data,
       )
+      
+      # Log any changes in data compared to previous state
+      if self.data is not None:
+        changes = {
+          k: (self.data.get(k), v) 
+          for k, v in data.items() 
+          if k in self.data and self.data.get(k) != v
+        }
+        if changes:
+          _LOGGER.debug("Data changes detected: %s", changes)
+      
       return data
     except Exception as e:
       _LOGGER.error(
