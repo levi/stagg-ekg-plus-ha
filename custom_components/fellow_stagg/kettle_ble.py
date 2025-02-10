@@ -14,20 +14,29 @@ class KettleBLEClient:
         self.service_uuid = SERVICE_UUID
         self.char_uuid = CHAR_UUID
         self.init_sequence = INIT_SEQUENCE
+        self._client = None
+
+    async def _ensure_connected(self, ble_device):
+        """Ensure BLE connection is established."""
+        if self._client is None or not self._client.is_connected:
+            _LOGGER.debug("Connecting to kettle at %s", self.address)
+            self._client = BleakClient(ble_device, timeout=10.0)
+            await self._client.connect()
+            await self._authenticate()
+
+    async def _authenticate(self):
+        """Send authentication sequence to kettle."""
+        try:
+            _LOGGER.debug("Writing init sequence to characteristic %s", self.char_uuid)
+            await self._client.write_gatt_char(self.char_uuid, self.init_sequence)
+        except Exception as err:
+            _LOGGER.error("Error writing init sequence: %s", err)
+            raise
 
     async def async_poll(self, ble_device):
         """Connect to the kettle, send init command, and return parsed state."""
-        _LOGGER.debug("Connecting to kettle at %s", self.address)
-        async with BleakClient(ble_device, timeout=10.0) as client:
-            try:
-                _LOGGER.debug(
-                    "Writing init sequence to characteristic %s", self.char_uuid
-                )
-                await client.write_gatt_char(self.char_uuid, self.init_sequence)
-            except Exception as err:
-                _LOGGER.error("Error writing init sequence: %s", err)
-                return {}
-
+        try:
+            await self._ensure_connected(ble_device)
             notifications = []
 
             def notification_handler(sender, data):
@@ -35,15 +44,59 @@ class KettleBLEClient:
                 notifications.append(data)
 
             try:
-                await client.start_notify(self.char_uuid, notification_handler)
+                await self._client.start_notify(self.char_uuid, notification_handler)
                 await asyncio.sleep(2.0)
-                await client.stop_notify(self.char_uuid)
+                await self._client.stop_notify(self.char_uuid)
             except Exception as err:
                 _LOGGER.error("Error during notifications: %s", err)
                 return {}
 
             state = self.parse_notifications(notifications)
             return state
+
+        except Exception as err:
+            _LOGGER.error("Error polling kettle: %s", err)
+            if self._client and self._client.is_connected:
+                await self._client.disconnect()
+            self._client = None
+            return {}
+
+    async def async_set_power(self, ble_device, power_on: bool):
+        """Turn the kettle on or off."""
+        try:
+            await self._ensure_connected(ble_device)
+            command = bytes.fromhex("efdd0a0000010100") if power_on else bytes.fromhex("efdd0a0400000400")
+            await self._client.write_gatt_char(self.char_uuid, command)
+        except Exception as err:
+            _LOGGER.error("Error setting power state: %s", err)
+            if self._client and self._client.is_connected:
+                await self._client.disconnect()
+            self._client = None
+            raise
+
+    async def async_set_temperature(self, ble_device, temp: int, fahrenheit: bool = True):
+        """Set target temperature."""
+        if fahrenheit and (temp < 104 or temp > 212):
+            raise ValueError("Temperature must be between 104°F and 212°F")
+        elif not fahrenheit and (temp < 40 or temp > 100):
+            raise ValueError("Temperature must be between 40°C and 100°C")
+
+        try:
+            await self._ensure_connected(ble_device)
+            command = bytes.fromhex(f"efdd0a0001{hex(temp)[2:]:0>2}{hex(temp)[2:]:0>2}{'01' if fahrenheit else '00'}")
+            await self._client.write_gatt_char(self.char_uuid, command)
+        except Exception as err:
+            _LOGGER.error("Error setting temperature: %s", err)
+            if self._client and self._client.is_connected:
+                await self._client.disconnect()
+            self._client = None
+            raise
+
+    async def disconnect(self):
+        """Disconnect from the kettle."""
+        if self._client and self._client.is_connected:
+            await self._client.disconnect()
+        self._client = None
 
     def parse_notifications(self, notifications):
         """Parse BLE notification payloads into kettle state.
