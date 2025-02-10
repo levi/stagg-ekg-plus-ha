@@ -1,13 +1,8 @@
+"""Support for Fellow Stagg EKG+ kettle sensors."""
 from dataclasses import dataclass
 from typing import Any, TypeVar, Callable
 
 from homeassistant import config_entries
-from homeassistant.components.bluetooth.passive_update_processor import (
-    PassiveBluetoothDataProcessor,
-    PassiveBluetoothDataUpdate,
-    PassiveBluetoothEntityKey,
-    PassiveBluetoothProcessorEntity,
-)
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -16,6 +11,10 @@ from homeassistant.components.sensor import (
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import (
+    CoordinatorEntity,
+    DataUpdateCoordinator,
+)
 
 from .const import DOMAIN
 
@@ -72,7 +71,6 @@ def get_sensor_descriptions() -> list[FellowStaggSensorEntityDescription]:
             key="countdown",
             name="Countdown",
             icon="mdi:timer",
-            native_unit_of_measurement="s",
         ),
     ]
 
@@ -81,57 +79,44 @@ def get_sensor_descriptions() -> list[FellowStaggSensorEntityDescription]:
 SENSOR_DESCRIPTIONS = get_sensor_descriptions()
 
 
-def sensor_update_to_bluetooth_data_update(
-    data: dict[str, Any] | None,
-) -> PassiveBluetoothDataUpdate:
-    """Convert sensor update to Bluetooth data update."""
-    entity_descriptions = {}
-    entity_data = {}
-    entity_names = {}
-
-    for description in SENSOR_DESCRIPTIONS:
-        key = PassiveBluetoothEntityKey(key=description.key, device_id=None)
-        entity_descriptions[key] = description
-        entity_names[key] = description.name
-        if value_fn := VALUE_FUNCTIONS.get(description.key):
-            entity_data[key] = value_fn(data)
-
-    return PassiveBluetoothDataUpdate(
-        devices={},
-        entity_descriptions=entity_descriptions,
-        entity_data=entity_data,
-        entity_names=entity_names,
-    )
-
-
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: config_entries.ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the Fellow Stagg BLE sensors."""
-    coordinator = hass.data[DOMAIN][entry.entry_id]
-    processor = PassiveBluetoothDataProcessor[float | int | str | None, None](
-        sensor_update_to_bluetooth_data_update
+    """Set up the Fellow Stagg sensors."""
+    coordinator: DataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
+
+    async_add_entities(
+        FellowStaggSensor(coordinator, description)
+        for description in SENSOR_DESCRIPTIONS
     )
-    entry.async_on_unload(
-        processor.async_add_entities_listener(
-            FellowStaggBluetoothSensorEntity,
-            async_add_entities,
-        )
-    )
-    entry.async_on_unload(coordinator.async_register_processor(processor))
 
 
-class FellowStaggBluetoothSensorEntity(
-    PassiveBluetoothProcessorEntity[
-        PassiveBluetoothDataProcessor[float | int | str | None, None]
-    ],
-    SensorEntity,
-):
-    """Representation of a Fellow Stagg Bluetooth sensor."""
+class FellowStaggSensor(CoordinatorEntity[DataUpdateCoordinator[dict[str, Any]]], SensorEntity):
+    """Fellow Stagg sensor."""
+
+    entity_description: FellowStaggSensorEntityDescription
+
+    def __init__(
+        self,
+        coordinator: DataUpdateCoordinator[dict[str, Any]],
+        description: FellowStaggSensorEntityDescription,
+    ) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._attr_unique_id = f"{coordinator.name}_{description.key}"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, coordinator.name)},
+            "name": "Fellow Stagg EKG+",
+            "manufacturer": "Fellow",
+            "model": "Stagg EKG+",
+        }
 
     @property
-    def native_value(self) -> float | int | str | None:
-        """Return the native value."""
-        return self.processor.entity_data.get(self.entity_key)
+    def native_value(self) -> str | None:
+        """Return the state of the sensor."""
+        if self.coordinator.data is None:
+            return None
+        return VALUE_FUNCTIONS[self.entity_description.key](self.coordinator.data)
