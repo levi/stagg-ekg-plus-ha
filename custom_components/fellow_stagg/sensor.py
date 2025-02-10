@@ -1,6 +1,6 @@
 """Support for Fellow Stagg EKG+ kettle sensors."""
 from dataclasses import dataclass
-from typing import Any, TypeVar, Callable
+from typing import Any, Callable
 
 from homeassistant import config_entries
 from homeassistant.components.sensor import (

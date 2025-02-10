@@ -1,30 +1,19 @@
 """Support for Fellow Stagg EKG+ kettles."""
 import logging
-from typing import Any
-import time
 from datetime import timedelta
+from typing import Any
 
+from homeassistant.components.bluetooth import (
+    async_ble_device_from_address,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, CoreState
-from homeassistant.components import bluetooth
-from homeassistant.components.bluetooth import (
-    BluetoothScanningMode,
-    BluetoothServiceInfoBleak,
-    async_ble_device_from_address,
-    async_register_callback
-)
-from homeassistant.components.bluetooth.match import (
-    BluetoothCallbackMatcher,
-    ADDRESS
-)
-from homeassistant.components.bluetooth.active_update_processor import (
-    ActiveBluetoothProcessorCoordinator
-)
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
 )
-from .const import DOMAIN, SERVICE_UUID
+
+from .const import DOMAIN
 from .kettle_ble import KettleBLEClient
 
 _LOGGER = logging.getLogger(__name__)

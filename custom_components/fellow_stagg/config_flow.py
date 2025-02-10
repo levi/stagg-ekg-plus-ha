@@ -1,17 +1,17 @@
 import logging
-import voluptuous as vol
 from typing import Any
+
+import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import (
     BluetoothServiceInfoBleak,
     async_discovered_service_info,
 )
 from homeassistant.data_entry_flow import FlowResult
+
 from .const import DOMAIN, SERVICE_UUID
 
 _LOGGER = logging.getLogger(__name__)
-
 
 class FellowStaggConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for the Fellow Stagg integration."""
