@@ -1,5 +1,9 @@
+"""Support for Fellow Stagg EKG+ kettles."""
 import logging
+from typing import Any
+
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, CoreState
 from homeassistant.components.bluetooth import (
     BluetoothScanningMode,
@@ -14,7 +18,12 @@ from .kettle_ble import KettleBLEClient
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["sensor"]
+PLATFORMS: list[Platform] = [Platform.SENSOR]
+
+
+async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
+    """Set up the Fellow Stagg integration."""
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -29,12 +38,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     def _needs_poll(
         service_info: BluetoothServiceInfoBleak, last_poll: float | None
     ) -> bool:
-        """Check if we should poll the device."""
-        # Always poll when we get an advertisement since we need
-        # to actively connect to get the data
-        return True
+        """Check if we should poll the device.
+        
+        We only poll when:
+        1. Home Assistant is fully started
+        2. We receive an advertisement
+        """
+        return hass.state == CoreState.running
 
-    async def _async_poll(service_info: BluetoothServiceInfoBleak):
+    async def _async_poll(service_info: BluetoothServiceInfoBleak) -> dict[str, Any] | None:
         """Poll the device for data."""
         _LOGGER.debug(
             "Polling Fellow Stagg kettle %s",
@@ -68,9 +80,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
             return None
 
-    def _process_update(service_info: BluetoothServiceInfoBleak):
+    def _process_update(service_info: BluetoothServiceInfoBleak) -> dict[str, Any] | None:
         """Process a Bluetooth update."""
-        # Return the last polled data
         return coordinator.last_poll_data if hasattr(coordinator, "last_poll_data") else None
 
     coordinator = ActiveBluetoothProcessorCoordinator(
@@ -81,9 +92,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         update_method=_process_update,
         needs_poll_method=_needs_poll,
         poll_method=_async_poll,
-        # We will take advertisements from non-connectable devices
-        # since we will trade the BLEDevice for a connectable one
-        # if we need to poll it
         connectable=False,
     )
 
@@ -96,7 +104,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload Fellow Stagg integration."""
-    coordinator = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
-    if coordinator:
+    if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+        coordinator = hass.data[DOMAIN].pop(entry.entry_id)
         await coordinator.async_stop()
+    return unload_ok
+
+
+async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
+    """Migrate old entry."""
+    _LOGGER.debug("Migrating from version %s", config_entry.version)
     return True
