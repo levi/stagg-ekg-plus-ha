@@ -1,7 +1,12 @@
+"""BLE client for the Fellow Stagg EKG+ kettle."""
 import asyncio
 import logging
-from bleak import BleakClient
+import time
+
+from bleak.backends.device import BLEDevice
+
 from .const import SERVICE_UUID, CHAR_UUID, INIT_SEQUENCE
+from .reliable_ble_client import EnhancedKettleBLEClient
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -10,25 +15,27 @@ class KettleBLEClient:
     """BLE client for the Fellow Stagg EKG+ kettle."""
 
     def __init__(self, address: str):
+        """Initialize the client."""
         self.address = address
         self.service_uuid = SERVICE_UUID
         self.char_uuid = CHAR_UUID
         self.init_sequence = INIT_SEQUENCE
-        self._client = None
+        self._client = EnhancedKettleBLEClient(address, SERVICE_UUID, CHAR_UUID)
         self._sequence = 0  # For command sequence numbering
         self._last_command_time = 0  # For debouncing commands
 
-    async def _ensure_connected(self, ble_device):
+    async def _ensure_connected(self, ble_device: BLEDevice) -> bool:
         """Ensure BLE connection is established."""
-        if self._client is None or not self._client.is_connected:
+        if not self._client.is_connected():
             _LOGGER.debug("Connecting to kettle at %s", self.address)
-            self._client = BleakClient(ble_device, timeout=10.0)
-            await self._client.connect()
+            if not await self._client.connect(ble_device):
+                _LOGGER.error("Failed to connect to kettle at %s", self.address)
+                return False
             await self._authenticate()
+        return True
 
     async def _ensure_debounce(self):
         """Ensure we don't send commands too frequently."""
-        import time
         current_time = int(time.time() * 1000)  # Current time in milliseconds
         if current_time - self._last_command_time < 200:  # 200ms debounce
             await asyncio.sleep(0.2)  # Wait 200ms
@@ -44,9 +51,9 @@ class KettleBLEClient:
             _LOGGER.error("Error writing init sequence: %s", err)
             raise
 
-    def _create_command(self, command_type: int, value: int, unit: bool = True) -> bytes:
+    def _create_command(self, command_type: int, value: int) -> bytes:
         """Create a command with proper sequence number and checksum.
-        
+
         Command format:
         - Bytes 0-1: Magic (0xef, 0xdd)
         - Byte 2: Command flag (0x0a)
@@ -68,50 +75,54 @@ class KettleBLEClient:
         self._sequence = (self._sequence + 1) & 0xFF
         return bytes(command)
 
-    async def async_poll(self, ble_device):
+    async def async_poll(self, ble_device: BLEDevice):
         """Connect to the kettle, send init command, and return parsed state."""
         try:
-            await self._ensure_connected(ble_device)
+            if not await self._ensure_connected(ble_device):
+                return {}
+
             notifications = []
 
             def notification_handler(sender, data):
                 notifications.append(data)
 
-            try:
-                await self._client.start_notify(self.char_uuid, notification_handler)
-                await asyncio.sleep(2.0)
-                await self._client.stop_notify(self.char_uuid)
-            except Exception as err:
-                _LOGGER.error("Error during notifications: %s", err)
+            # Start notifications
+            if not await self._client.start_notify(self.char_uuid, notification_handler):
                 return {}
 
+            # Wait for notifications to come in
+            await asyncio.sleep(2.0)
+
+            # Stop notifications
+            await self._client.stop_notify(self.char_uuid)
+
+            # Parse notifications into state
             state = self.parse_notifications(notifications)
             return state
 
         except Exception as err:
             _LOGGER.error("Error polling kettle: %s", err)
-            if self._client and self._client.is_connected:
-                await self._client.disconnect()
-            self._client = None
+            await self._client.disconnect()
             return {}
 
-    async def async_set_power(self, ble_device, power_on: bool):
+    async def async_set_power(self, ble_device: BLEDevice, power_on: bool):
         """Turn the kettle on or off."""
         try:
-            await self._ensure_connected(ble_device)
+            if not await self._ensure_connected(ble_device):
+                _LOGGER.error("Failed to connect for power setting")
+                return
+
             await self._ensure_debounce()
             command = self._create_command(0, 1 if power_on else 0)
             await self._client.write_gatt_char(self.char_uuid, command)
         except Exception as err:
             _LOGGER.error("Error setting power state: %s", err)
-            if self._client and self._client.is_connected:
-                await self._client.disconnect()
-            self._client = None
+            await self._client.disconnect()
             raise
 
-    async def async_set_temperature(self, ble_device, temp: int, fahrenheit: bool = True):
+    async def async_set_temperature(self, ble_device: BLEDevice, temp: int, fahrenheit: bool = True):
         """Set target temperature."""
-        # Temperature validation from C++ setTemp method
+        # Temperature validation
         if fahrenheit:
             if temp > 212:
                 temp = 212
@@ -124,22 +135,21 @@ class KettleBLEClient:
                 temp = 40
 
         try:
-            await self._ensure_connected(ble_device)
+            if not await self._ensure_connected(ble_device):
+                _LOGGER.error("Failed to connect for temperature setting")
+                return
+
             await self._ensure_debounce()
             command = self._create_command(1, temp)  # Type 1 = temperature command
             await self._client.write_gatt_char(self.char_uuid, command)
         except Exception as err:
             _LOGGER.error("Error setting temperature: %s", err)
-            if self._client and self._client.is_connected:
-                await self._client.disconnect()
-            self._client = None
+            await self._client.disconnect()
             raise
 
     async def disconnect(self):
         """Disconnect from the kettle."""
-        if self._client and self._client.is_connected:
-            await self._client.disconnect()
-        self._client = None
+        await self._client.disconnect()
 
     def parse_notifications(self, notifications):
         """Parse BLE notification payloads into kettle state.
@@ -164,13 +174,13 @@ class KettleBLEClient:
         while i < len(notifications) - 1:  # Process pairs of notifications
             header = notifications[i]
             payload = notifications[i + 1]
-            
+
             if len(header) < 3 or header[0] != 0xEF or header[1] != 0xDD:
                 i += 1
                 continue
-                
+
             msg_type = header[2]
-            
+
             if msg_type == 0:
                 # Power state
                 if len(payload) >= 1:
@@ -201,7 +211,7 @@ class KettleBLEClient:
                 # Kettle position
                 if len(payload) >= 1:
                     state["lifted"] = payload[0] == 0
-            
+
             i += 2  # Move to next pair of notifications
-            
+
         return state
