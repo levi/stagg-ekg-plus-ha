@@ -1,12 +1,11 @@
 """BLE client for the Fellow Stagg EKG Pro kettle."""
-import asyncio
 import logging
-import time
+from typing import Dict, Any
 
 from bleak.backends.device import BLEDevice
 
 from .const import SERVICE_UUID, CHAR_UUID, INIT_SEQUENCE, CUSTOM_SERVICE_UUID
-from .reliable_ble_client import EnhancedKettleBLEClient
+from .simple_ble_client import SimpleBleClient
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -21,135 +20,52 @@ class KettleBLEClient:
         self.char_uuid = CHAR_UUID
         self.custom_service_uuid = CUSTOM_SERVICE_UUID
         self.init_sequence = INIT_SEQUENCE
-        self._client = EnhancedKettleBLEClient(address, SERVICE_UUID, CHAR_UUID)
-        self._sequence = 0  # For command sequence numbering
-        self._last_command_time = 0  # For debouncing commands
+        self._client = SimpleBleClient(address, SERVICE_UUID, CHAR_UUID)
 
-    async def _ensure_connected(self, ble_device: BLEDevice) -> bool:
-        """Ensure BLE connection is established."""
-        if not self._client.is_connected():
-            _LOGGER.debug("Connecting to kettle at %s", self.address)
-            if not await self._client.connect(ble_device):
-                _LOGGER.error("Failed to connect to kettle at %s", self.address)
-                return False
-
-            # Try authentication after connection
-            success = await self._authenticate()
-            if not success:
-                _LOGGER.error("Authentication failed for kettle at %s", self.address)
-                await self._client.disconnect()
-                return False
-
-        return True
-
-    async def _ensure_debounce(self):
-        """Ensure we don't send commands too frequently."""
-        current_time = int(time.time() * 1000)  # Current time in milliseconds
-        if current_time - self._last_command_time < 200:  # 200ms debounce
-            await asyncio.sleep(0.2)  # Wait 200ms
-        self._last_command_time = current_time
-
-    async def _authenticate(self) -> bool:
-        """Send authentication sequence to kettle."""
-        _LOGGER.debug("Attempting to authenticate with kettle")
-        try:
-            _LOGGER.debug("Writing init sequence to characteristic %s", self.char_uuid)
-            await self._ensure_debounce()
-            result = await self._client.write_gatt_char(self.char_uuid, self.init_sequence)
-
-            if not result:
-                _LOGGER.error("Failed to write init sequence to kettle")
-                return False
-
-            _LOGGER.debug("Successfully wrote init sequence to kettle")
-            # Give kettle time to process authentication
-            await asyncio.sleep(0.5)
-            return True
-        except Exception as err:
-            _LOGGER.error("Error during authentication: %s", str(err))
-            return False
-
-    def _create_command(self, command_type: int, value: int) -> bytes:
-        """Create a command with proper sequence number and checksum.
-
-        Command format:
-        - Bytes 0-1: Magic (0xef, 0xdd)
-        - Byte 2: Command flag (0x0a)
-        - Byte 3: Sequence number
-        - Byte 4: Command type (0=power, 1=temp)
-        - Byte 5: Value
-        - Byte 6: Checksum 1 (sequence + value)
-        - Byte 7: Checksum 2 (command type)
-        """
-        command = bytearray([
-            0xef, 0xdd,  # Magic
-            0x0a,        # Command flag
-            self._sequence,  # Sequence number
-            command_type,    # Command type
-            value,          # Value
-            (self._sequence + value) & 0xFF,  # Checksum 1
-            command_type    # Checksum 2
-        ])
-        self._sequence = (self._sequence + 1) & 0xFF
-        return bytes(command)
-
-    async def async_poll(self, ble_device: BLEDevice):
+    async def async_poll(self, ble_device: BLEDevice) -> Dict[str, Any]:
         """Connect to the kettle, send init command, and return parsed state."""
-        try:
-            if not await self._ensure_connected(ble_device):
+        async def poll_operation(client):
+            # First authenticate
+            success = await self._client.write_auth_sequence(client, self.init_sequence)
+            if not success:
+                _LOGGER.error("Failed to authenticate with kettle")
                 return {}
 
-            notifications = []
-
-            def notification_handler(sender, data):
-                _LOGGER.debug("Received notification: %s", data.hex())
-                notifications.append(data)
-
-            # Start notifications
-            if not await self._client.start_notify(self.char_uuid, notification_handler):
-                _LOGGER.error("Failed to start notifications")
-                return {}
-
-            # Wait for notifications to come in
-            await asyncio.sleep(2.0)
-
-            # Stop notifications
-            await self._client.stop_notify(self.char_uuid)
-
+            # Read notifications to get current state
+            notifications = await self._client.read_notifications(client)
             if not notifications:
                 _LOGGER.warning("No notifications received from kettle")
                 return {}
 
             # Parse notifications into state
-            state = self.parse_notifications(notifications)
-            _LOGGER.debug("Parsed state: %s", state)
-            return state
+            return self._client.parse_notifications(notifications)
 
-        except Exception as err:
-            _LOGGER.error("Error polling kettle: %s", err)
-            await self._client.disconnect()
-            return {}
+        # Execute the poll operation
+        return await self._client.connect_and_execute(ble_device, poll_operation)
 
-    async def async_set_power(self, ble_device: BLEDevice, power_on: bool):
+    async def async_set_power(self, ble_device: BLEDevice, power_on: bool) -> bool:
         """Turn the kettle on or off."""
-        try:
-            if not await self._ensure_connected(ble_device):
-                _LOGGER.error("Failed to connect for power setting")
-                return
+        async def power_operation(client):
+            # First authenticate
+            success = await self._client.write_auth_sequence(client, self.init_sequence)
+            if not success:
+                _LOGGER.error("Failed to authenticate with kettle during power operation")
+                return False
 
-            await self._ensure_debounce()
-            command = self._create_command(0, 1 if power_on else 0)
-            _LOGGER.debug("Sending power command: %s", command.hex())
-            result = await self._client.write_gatt_char(self.char_uuid, command)
-
-            if not result:
+            # Create and send power command
+            command = self._client.create_command(0, 1 if power_on else 0)
+            success = await self._client.write_command(client, command)
+            if not success:
                 _LOGGER.error("Failed to send power command")
-        except Exception as err:
-            _LOGGER.error("Error setting power state: %s", err)
-            await self._client.disconnect()
-            raise
+                return False
 
-    async def async_set_temperature(self, ble_device: BLEDevice, temp: int, fahrenheit: bool = True):
+            return True
+
+        # Execute the power operation
+        success = await self._client.connect_and_execute(ble_device, power_operation)
+        return success or False
+
+    async def async_set_temperature(self, ble_device: BLEDevice, temp: int, fahrenheit: bool = True) -> bool:
         """Set target temperature."""
         # Temperature validation
         if fahrenheit:
@@ -163,102 +79,26 @@ class KettleBLEClient:
             if temp < 40:
                 temp = 40
 
-        try:
-            if not await self._ensure_connected(ble_device):
-                _LOGGER.error("Failed to connect for temperature setting")
-                return
+        async def temp_operation(client):
+            # First authenticate
+            success = await self._client.write_auth_sequence(client, self.init_sequence)
+            if not success:
+                _LOGGER.error("Failed to authenticate with kettle during temperature operation")
+                return False
 
-            await self._ensure_debounce()
-            command = self._create_command(1, temp)  # Type 1 = temperature command
-            _LOGGER.debug("Sending temperature command: %s", command.hex())
-            result = await self._client.write_gatt_char(self.char_uuid, command)
-
-            if not result:
+            # Create and send temperature command
+            command = self._client.create_command(1, temp)  # Type 1 = temperature command
+            success = await self._client.write_command(client, command)
+            if not success:
                 _LOGGER.error("Failed to send temperature command")
-        except Exception as err:
-            _LOGGER.error("Error setting temperature: %s", err)
-            await self._client.disconnect()
-            raise
+                return False
+
+            return True
+
+        # Execute the temperature operation
+        success = await self._client.connect_and_execute(ble_device, temp_operation)
+        return success or False
 
     async def disconnect(self):
-        """Disconnect from the kettle."""
-        await self._client.disconnect()
-
-    def parse_notifications(self, notifications):
-        """Parse BLE notification payloads into kettle state.
-
-        Expected frame format comes in two notifications:
-          First notification:
-            - Bytes 0-1: Magic (0xef, 0xdd)
-            - Byte 2: Message type
-          Second notification:
-            - Payload data
-
-        Reverse engineered types:
-          - Type 0: Power (1 = on, 0 = off)
-          - Type 1: Hold (1 = hold, 0 = normal)
-          - Type 2: Target temperature (byte 0: temp, byte 1: unit, 1 = F, else C)
-          - Type 3: Current temperature (byte 0: temp, byte 1: unit, 1 = F, else C)
-          - Type 4: Countdown
-          - Type 8: Kettle position (0 = lifted, 1 = on base)
-        """
-        state = {}
-
-        # Log all notifications for debugging
-        for i, notif in enumerate(notifications):
-            _LOGGER.debug("Notification %d: %s", i, notif.hex())
-
-        i = 0
-        while i < len(notifications) - 1:  # Process pairs of notifications
-            header = notifications[i]
-            payload = notifications[i + 1]
-
-            if len(header) < 3 or header[0] != 0xEF or header[1] != 0xDD:
-                i += 1
-                continue
-
-            msg_type = header[2]
-            _LOGGER.debug("Processing message type %d with payload %s", msg_type, payload.hex())
-
-            if msg_type == 0:
-                # Power state
-                if len(payload) >= 1:
-                    state["power"] = payload[0] == 1
-                    _LOGGER.debug("Power state: %s", state["power"])
-            elif msg_type == 1:
-                # Hold state
-                if len(payload) >= 1:
-                    state["hold"] = payload[0] == 1
-                    _LOGGER.debug("Hold state: %s", state["hold"])
-            elif msg_type == 2:
-                # Target temperature
-                if len(payload) >= 2:
-                    temp = payload[0]  # Single byte temperature
-                    is_fahrenheit = payload[1] == 1
-                    state["target_temp"] = temp
-                    state["units"] = "F" if is_fahrenheit else "C"
-                    _LOGGER.debug("Target temp: %d°%s", temp, state["units"])
-            elif msg_type == 3:
-                # Current temperature
-                if len(payload) >= 2:
-                    temp = payload[0]  # Single byte temperature
-                    is_fahrenheit = payload[1] == 1
-                    state["current_temp"] = temp
-                    state["units"] = "F" if is_fahrenheit else "C"
-                    _LOGGER.debug("Current temp: %d°%s", temp, state["units"])
-            elif msg_type == 4:
-                # Countdown
-                if len(payload) >= 1:
-                    state["countdown"] = payload[0]
-                    _LOGGER.debug("Countdown: %d", state["countdown"])
-            elif msg_type == 8:
-                # Kettle position
-                if len(payload) >= 1:
-                    state["lifted"] = payload[0] == 0
-                    _LOGGER.debug("Lifted: %s", state["lifted"])
-            else:
-                _LOGGER.debug("Unknown message type: %d", msg_type)
-
-            i += 2  # Move to next pair of notifications
-
-        return state
+        """No persistent connection to disconnect in this implementation."""
+        pass  # This is a no-op since we don't maintain a persistent connection
