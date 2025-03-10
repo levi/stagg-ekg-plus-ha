@@ -1,7 +1,7 @@
 """Support for Fellow Stagg EKG+ kettles."""
 import logging
 from datetime import timedelta
-from typing import Any
+from typing import Any, Dict, Optional
 
 from homeassistant.components.bluetooth import (
     async_ble_device_from_address,
@@ -16,14 +16,12 @@ from homeassistant.helpers.update_coordinator import (
 from homeassistant.helpers.device_registry import DeviceInfo
 import async_timeout
 
-from .const import DOMAIN
+from .const import DOMAIN, POLLING_INTERVAL_SECONDS, CONNECTION_TIMEOUT
 from .kettle_ble import KettleBLEClient
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.SWITCH, Platform.NUMBER, Platform.WATER_HEATER]
-POLLING_INTERVAL = timedelta(seconds=30)  # Increased poll time to reduce BLE traffic
-CONNECTION_TIMEOUT = 15  # Timeout for BLE operations in seconds
+PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.SWITCH, Platform.NUMBER, Platform.WATER_HEATER, Platform.BINARY_SENSOR]
 
 # Temperature ranges for the kettle
 MIN_TEMP_F = 104
@@ -41,20 +39,20 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator):
             hass,
             _LOGGER,
             name=f"Fellow Stagg {address}",
-            update_interval=POLLING_INTERVAL,
+            update_interval=timedelta(seconds=POLLING_INTERVAL_SECONDS),
         )
         self.kettle = KettleBLEClient(address)
         self.ble_device = None
         self._address = address
-        self._last_update_success = False
         self._connection_retries = 0
         self._max_retries = 3
+        self._data_cache: Optional[Dict[str, Any]] = None
 
         self.device_info = DeviceInfo(
             identifiers={(DOMAIN, address)},
-            name=f"Fellow Stagg EKG+ {address}",
+            name=f"Fellow Stagg EKG Pro ({address})",
             manufacturer="Fellow",
-            model="Stagg EKG+ Pro",  # Updated for Pro model
+            model="Stagg EKG Pro",
         )
 
     @property
@@ -72,19 +70,24 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator):
         """Get the maximum temperature based on current units."""
         return MAX_TEMP_F if self.temperature_unit == UnitOfTemperature.FAHRENHEIT else MAX_TEMP_C
 
-    async def _async_update_data(self) -> dict[str, Any] | None:
+    async def _async_update_data(self) -> Dict[str, Any]:
         """Fetch data from the kettle."""
         _LOGGER.debug("Attempting to update data for %s", self._address)
 
         # Get the BLE device
-        self.ble_device = async_ble_device_from_address(self.hass, self._address, True)
+        self.ble_device = async_ble_device_from_address(self.hass, self._address, connectable=True)
         if not self.ble_device:
             _LOGGER.debug("No connectable device found for %s", self._address)
             self._connection_retries += 1
             if self._connection_retries > self._max_retries:
                 _LOGGER.warning("Reached max connection attempts for %s", self._address)
                 self._connection_retries = 0
-            return self.data  # Return last known data
+            if self._data_cache is not None:
+                # Return cached data if available
+                return self._data_cache
+            else:
+                # No cached data and no device found
+                raise UpdateFailed(f"No connectable device found for {self._address}")
 
         try:
             # Use a timeout to prevent hanging
@@ -93,7 +96,7 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator):
 
             if data:
                 self._connection_retries = 0
-                self._last_update_success = True
+                self._data_cache = data
 
                 # Log any changes in data compared to previous state
                 if self.data is not None:
@@ -113,8 +116,11 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator):
                 return data
             else:
                 self._connection_retries += 1
-                _LOGGER.warning("No new data retrieved. Using last known data.")
-                return self.data  # Return last known data
+                if self._data_cache is not None:
+                    _LOGGER.warning("No new data retrieved. Using cached data.")
+                    return self._data_cache
+                else:
+                    raise UpdateFailed("Failed to get data from kettle")
 
         except Exception as e:
             self._connection_retries += 1
@@ -123,15 +129,13 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator):
                 self._address,
                 str(e),
             )
-            # Only raise UpdateFailed if we don't have any previous data
-            if self.data is None:
-                raise UpdateFailed(f"Failed to update kettle status: {e}")
-            return self.data  # Return last known data
+            if self._data_cache is not None:
+                return self._data_cache
+            raise UpdateFailed(f"Failed to update kettle status: {e}")
         finally:
             _LOGGER.debug(
-                "Finished fetching Fellow Stagg %s data in %.3f seconds (success: %s)",
+                "Finished fetching Fellow Stagg %s data (success: %s)",
                 self._address,
-                0.0,  # Placeholder
                 bool(data) if 'data' in locals() else False,
             )
 
