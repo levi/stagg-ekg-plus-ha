@@ -1,8 +1,5 @@
-"""Binary sensor platform for Fellow Stagg EKG+ kettle."""
-from __future__ import annotations
-
+"""Binary sensor platform for Fellow Stagg EKG Pro kettle."""
 import logging
-from typing import Any
 
 from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
@@ -44,5 +41,5 @@ class FellowStaggConnectionSensor(CoordinatorEntity, BinarySensorEntity):
 
     @property
     def is_on(self) -> bool:
-        """Return true if the device is connected."""
+        """Return true if the kettle is connected."""
         return self.coordinator.last_update_success
