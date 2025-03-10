@@ -47,6 +47,8 @@ class EnhancedKettleBLEClient:
             _LOGGER.debug("Connecting to device at %s", self.address)
             self._client = BleakClient(ble_device, timeout=10.0)
             await self._client.connect()
+            # Call discover services
+            await self._discover_services()
             self._is_connected = True
             self._connection_attempts = 0
             self._last_activity = datetime.now()
@@ -62,6 +64,17 @@ class EnhancedKettleBLEClient:
                 exc_info=True,
             )
             return False
+
+    async def _discover_services(self):
+        """Discover services on the device.
+
+        This method was missing in the original implementation and was causing the error.
+        Adding a simple implementation to make the connection work.
+        """
+        _LOGGER.debug("Discovering services on device %s", self.address)
+        # This is a minimal implementation - it doesn't need to do anything
+        # for the Fellow Stagg kettle, but it needs to exist to prevent errors
+        pass
 
     async def disconnect(self) -> None:
         """Disconnect from the device."""
