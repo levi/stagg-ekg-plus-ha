@@ -1,24 +1,25 @@
-"""BLE client for the Fellow Stagg EKG+ kettle."""
+"""BLE client for the Fellow Stagg EKG Pro kettle."""
 import asyncio
 import logging
 import time
 
 from bleak.backends.device import BLEDevice
 
-from .const import SERVICE_UUID, CHAR_UUID, INIT_SEQUENCE
+from .const import SERVICE_UUID, CHAR_UUID, INIT_SEQUENCE, CUSTOM_SERVICE_UUID
 from .reliable_ble_client import EnhancedKettleBLEClient
 
 _LOGGER = logging.getLogger(__name__)
 
 
 class KettleBLEClient:
-    """BLE client for the Fellow Stagg EKG+ kettle."""
+    """BLE client for the Fellow Stagg EKG Pro kettle."""
 
     def __init__(self, address: str):
         """Initialize the client."""
         self.address = address
         self.service_uuid = SERVICE_UUID
         self.char_uuid = CHAR_UUID
+        self.custom_service_uuid = CUSTOM_SERVICE_UUID
         self.init_sequence = INIT_SEQUENCE
         self._client = EnhancedKettleBLEClient(address, SERVICE_UUID, CHAR_UUID)
         self._sequence = 0  # For command sequence numbering
@@ -31,7 +32,14 @@ class KettleBLEClient:
             if not await self._client.connect(ble_device):
                 _LOGGER.error("Failed to connect to kettle at %s", self.address)
                 return False
-            await self._authenticate()
+
+            # Try authentication after connection
+            success = await self._authenticate()
+            if not success:
+                _LOGGER.error("Authentication failed for kettle at %s", self.address)
+                await self._client.disconnect()
+                return False
+
         return True
 
     async def _ensure_debounce(self):
@@ -41,15 +49,25 @@ class KettleBLEClient:
             await asyncio.sleep(0.2)  # Wait 200ms
         self._last_command_time = current_time
 
-    async def _authenticate(self):
+    async def _authenticate(self) -> bool:
         """Send authentication sequence to kettle."""
+        _LOGGER.debug("Attempting to authenticate with kettle")
         try:
             _LOGGER.debug("Writing init sequence to characteristic %s", self.char_uuid)
             await self._ensure_debounce()
-            await self._client.write_gatt_char(self.char_uuid, self.init_sequence)
+            result = await self._client.write_gatt_char(self.char_uuid, self.init_sequence)
+
+            if not result:
+                _LOGGER.error("Failed to write init sequence to kettle")
+                return False
+
+            _LOGGER.debug("Successfully wrote init sequence to kettle")
+            # Give kettle time to process authentication
+            await asyncio.sleep(0.5)
+            return True
         except Exception as err:
-            _LOGGER.error("Error writing init sequence: %s", err)
-            raise
+            _LOGGER.error("Error during authentication: %s", str(err))
+            return False
 
     def _create_command(self, command_type: int, value: int) -> bytes:
         """Create a command with proper sequence number and checksum.
@@ -84,10 +102,12 @@ class KettleBLEClient:
             notifications = []
 
             def notification_handler(sender, data):
+                _LOGGER.debug("Received notification: %s", data.hex())
                 notifications.append(data)
 
             # Start notifications
             if not await self._client.start_notify(self.char_uuid, notification_handler):
+                _LOGGER.error("Failed to start notifications")
                 return {}
 
             # Wait for notifications to come in
@@ -96,8 +116,13 @@ class KettleBLEClient:
             # Stop notifications
             await self._client.stop_notify(self.char_uuid)
 
+            if not notifications:
+                _LOGGER.warning("No notifications received from kettle")
+                return {}
+
             # Parse notifications into state
             state = self.parse_notifications(notifications)
+            _LOGGER.debug("Parsed state: %s", state)
             return state
 
         except Exception as err:
@@ -114,7 +139,11 @@ class KettleBLEClient:
 
             await self._ensure_debounce()
             command = self._create_command(0, 1 if power_on else 0)
-            await self._client.write_gatt_char(self.char_uuid, command)
+            _LOGGER.debug("Sending power command: %s", command.hex())
+            result = await self._client.write_gatt_char(self.char_uuid, command)
+
+            if not result:
+                _LOGGER.error("Failed to send power command")
         except Exception as err:
             _LOGGER.error("Error setting power state: %s", err)
             await self._client.disconnect()
@@ -141,7 +170,11 @@ class KettleBLEClient:
 
             await self._ensure_debounce()
             command = self._create_command(1, temp)  # Type 1 = temperature command
-            await self._client.write_gatt_char(self.char_uuid, command)
+            _LOGGER.debug("Sending temperature command: %s", command.hex())
+            result = await self._client.write_gatt_char(self.char_uuid, command)
+
+            if not result:
+                _LOGGER.error("Failed to send temperature command")
         except Exception as err:
             _LOGGER.error("Error setting temperature: %s", err)
             await self._client.disconnect()
@@ -170,6 +203,11 @@ class KettleBLEClient:
           - Type 8: Kettle position (0 = lifted, 1 = on base)
         """
         state = {}
+
+        # Log all notifications for debugging
+        for i, notif in enumerate(notifications):
+            _LOGGER.debug("Notification %d: %s", i, notif.hex())
+
         i = 0
         while i < len(notifications) - 1:  # Process pairs of notifications
             header = notifications[i]
@@ -180,15 +218,18 @@ class KettleBLEClient:
                 continue
 
             msg_type = header[2]
+            _LOGGER.debug("Processing message type %d with payload %s", msg_type, payload.hex())
 
             if msg_type == 0:
                 # Power state
                 if len(payload) >= 1:
                     state["power"] = payload[0] == 1
+                    _LOGGER.debug("Power state: %s", state["power"])
             elif msg_type == 1:
                 # Hold state
                 if len(payload) >= 1:
                     state["hold"] = payload[0] == 1
+                    _LOGGER.debug("Hold state: %s", state["hold"])
             elif msg_type == 2:
                 # Target temperature
                 if len(payload) >= 2:
@@ -196,6 +237,7 @@ class KettleBLEClient:
                     is_fahrenheit = payload[1] == 1
                     state["target_temp"] = temp
                     state["units"] = "F" if is_fahrenheit else "C"
+                    _LOGGER.debug("Target temp: %d°%s", temp, state["units"])
             elif msg_type == 3:
                 # Current temperature
                 if len(payload) >= 2:
@@ -203,14 +245,19 @@ class KettleBLEClient:
                     is_fahrenheit = payload[1] == 1
                     state["current_temp"] = temp
                     state["units"] = "F" if is_fahrenheit else "C"
+                    _LOGGER.debug("Current temp: %d°%s", temp, state["units"])
             elif msg_type == 4:
                 # Countdown
                 if len(payload) >= 1:
                     state["countdown"] = payload[0]
+                    _LOGGER.debug("Countdown: %d", state["countdown"])
             elif msg_type == 8:
                 # Kettle position
                 if len(payload) >= 1:
                     state["lifted"] = payload[0] == 0
+                    _LOGGER.debug("Lifted: %s", state["lifted"])
+            else:
+                _LOGGER.debug("Unknown message type: %d", msg_type)
 
             i += 2  # Move to next pair of notifications
 
