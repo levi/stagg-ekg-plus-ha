@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from bleak import BleakClient
+from bleak_retry_connector import establish_connection
 from .const import SERVICE_UUID, CHAR_UUID, INIT_SEQUENCE
 
 _LOGGER = logging.getLogger(__name__)
@@ -22,8 +23,9 @@ class KettleBLEClient:
         """Ensure BLE connection is established."""
         if self._client is None or not self._client.is_connected:
             _LOGGER.debug("Connecting to kettle at %s", self.address)
-            self._client = BleakClient(ble_device, timeout=10.0)
-            await self._client.connect()
+            self._client = await establish_connection(
+                BleakClient, ble_device, self.address, max_attempts=3
+            )
             await self._authenticate()
 
     async def _ensure_debounce(self):
