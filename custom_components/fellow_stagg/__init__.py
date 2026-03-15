@@ -14,13 +14,12 @@ from homeassistant.helpers.update_coordinator import (
 )
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from .const import DOMAIN
+from .const import DOMAIN, CONF_POLLING_INTERVAL, DEFAULT_POLLING_INTERVAL
 from .kettle_ble import KettleBLEClient
 
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.SWITCH, Platform.NUMBER, Platform.WATER_HEATER]
-POLLING_INTERVAL = timedelta(seconds=5)  # Poll every 5 seconds (minimum allowed)
 
 # Temperature ranges for the kettle
 MIN_TEMP_F = 104
@@ -32,17 +31,18 @@ MAX_TEMP_C = 100
 class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator):
   """Class to manage fetching Fellow Stagg data."""
 
-  def __init__(self, hass: HomeAssistant, address: str) -> None:
+  def __init__(self, hass: HomeAssistant, address: str, entry_id: str, polling_interval: timedelta) -> None:
     """Initialize the coordinator."""
     super().__init__(
       hass,
       _LOGGER,
       name=f"Fellow Stagg {address}",
-      update_interval=POLLING_INTERVAL,
+      update_interval=polling_interval,
     )
     self.kettle = KettleBLEClient(address)
     self.ble_device = None
     self._address = address
+    self.entry_id = entry_id
 
     self.device_info = DeviceInfo(
       identifiers={(DOMAIN, address)},
@@ -117,7 +117,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return False
 
   _LOGGER.debug("Setting up Fellow Stagg integration for device: %s", address)
-  coordinator = FellowStaggDataUpdateCoordinator(hass, address)
+  interval_seconds = entry.options.get(CONF_POLLING_INTERVAL, DEFAULT_POLLING_INTERVAL)
+  coordinator = FellowStaggDataUpdateCoordinator(hass, address, entry.entry_id, timedelta(seconds=interval_seconds))
 
   # Do first update
   await coordinator.async_config_entry_first_refresh()
