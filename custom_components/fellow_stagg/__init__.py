@@ -5,6 +5,8 @@ from typing import Any
 
 from homeassistant.components.bluetooth import (
     async_ble_device_from_address,
+    async_last_service_info,
+    async_scanner_by_source,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform, UnitOfTemperature
@@ -43,6 +45,7 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator):
     self.ble_device = None
     self._address = address
     self.entry_id = entry_id
+    self._last_service_info = None  # cached for idle-kettle directed connect
 
     self.device_info = DeviceInfo(
       identifiers={(DOMAIN, address)},
@@ -66,15 +69,64 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator):
     """Get the maximum temperature based on current units."""
     return MAX_TEMP_F if self.temperature_unit == UnitOfTemperature.FAHRENHEIT else MAX_TEMP_C
 
+  def _inject_cached_ble_device(self) -> None:
+    """Re-insert the last known service info into the BLE scanner cache.
+
+    The kettle stops advertising after ~3 min idle but accepts directed connections.
+    HA's BLE routing requires a live scanner cache entry to route through the proxy.
+    Injecting the cached entry with a current timestamp unblocks routing; the proxy
+    then initiates the directed BLE connection by address.
+    """
+    service_info = self._last_service_info
+    if service_info is None:
+      return
+    try:
+      from bluetooth_data_tools import monotonic_time_coarse
+      service_info.time = monotonic_time_coarse()
+    except Exception:
+      pass
+    scanner = async_scanner_by_source(self.hass, service_info.source)
+    if scanner is not None:
+      scanner._previous_service_info[self._address] = service_info
+      _LOGGER.debug(
+        "Injected cached BLE device for %s via scanner %s for directed connect",
+        self._address, service_info.source,
+      )
+
+  def get_ble_device_for_connect(self):
+    """Return the best available BLEDevice, injecting cached state if needed.
+
+    Returns the live device if present, the cached device after cache injection
+    if available, or None if no prior advertisement has ever been seen.
+    """
+    ble_device = async_ble_device_from_address(self.hass, self._address, True)
+    if ble_device is not None:
+      return ble_device
+    if self._last_service_info is not None:
+      self._inject_cached_ble_device()
+      return self._last_service_info.device
+    return None
+
   async def _async_update_data(self) -> dict[str, Any] | None:
     """Fetch data from the kettle."""
     _LOGGER.debug("Starting poll for Fellow Stagg kettle %s", self._address)
-    
+
     self.ble_device = async_ble_device_from_address(self.hass, self._address, True)
     if not self.ble_device:
-      _LOGGER.debug("No connectable device found")
-      return None
-        
+      if self._last_service_info is not None:
+        _LOGGER.debug(
+          "No advertisement in cache; injecting cached service info for directed connect to %s",
+          self._address,
+        )
+        self._inject_cached_ble_device()
+        self.ble_device = self._last_service_info.device
+      else:
+        _LOGGER.debug(
+          "No advertisement and no cached service info for %s; skipping poll",
+          self._address,
+        )
+        return None
+
     try:
       _LOGGER.debug("Attempting to poll kettle data...")
       data = await self.kettle.async_poll(self.ble_device)
@@ -83,17 +135,22 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator):
         self._address,
         data,
       )
-      
+
+      # Update cache after a successful poll
+      fresh_info = async_last_service_info(self.hass, self._address, True)
+      if fresh_info is not None:
+        self._last_service_info = fresh_info
+
       # Log any changes in data compared to previous state
       if self.data is not None:
         changes = {
-          k: (self.data.get(k), v) 
-          for k, v in data.items() 
+          k: (self.data.get(k), v)
+          for k, v in data.items()
           if k in self.data and self.data.get(k) != v
         }
         if changes:
           _LOGGER.debug("Data changes detected: %s", changes)
-      
+
       return data
     except Exception as e:
       _LOGGER.error(
@@ -126,7 +183,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
   hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
   await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-  
+
   _LOGGER.debug("Setup complete for Fellow Stagg device: %s", address)
   return True
 

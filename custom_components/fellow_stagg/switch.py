@@ -49,7 +49,8 @@ class FellowStaggPowerSwitch(SwitchEntity):
   async def async_turn_on(self, **kwargs: Any) -> None:
     """Turn the switch on."""
     _LOGGER.debug("Turning power switch ON")
-    await self.coordinator.kettle.async_set_power(self.coordinator.ble_device, True)
+    ble_device = self.coordinator.get_ble_device_for_connect()
+    await self.coordinator.kettle.async_set_power(ble_device, True)
     _LOGGER.debug("Power ON command sent, waiting before refresh")
     # Give the kettle a moment to update its internal state
     await asyncio.sleep(0.5)
@@ -59,7 +60,8 @@ class FellowStaggPowerSwitch(SwitchEntity):
   async def async_turn_off(self, **kwargs: Any) -> None:
     """Turn the switch off."""
     _LOGGER.debug("Turning power switch OFF")
-    await self.coordinator.kettle.async_set_power(self.coordinator.ble_device, False)
+    ble_device = self.coordinator.get_ble_device_for_connect()
+    await self.coordinator.kettle.async_set_power(ble_device, False)
     _LOGGER.debug("Power OFF command sent, waiting before refresh")
     # Give the kettle a moment to update its internal state
     await asyncio.sleep(0.5)
